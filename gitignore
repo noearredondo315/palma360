@@ -1,0 +1,28 @@
+# Archivos compilados de Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Entornos virtuales
+.venv/
+env/
+venv/
+
+# Configuración de entorno local
+.env
+
+# Carpetas de checkpoints de Jupyter
+.ipynb_checkpoints/
+
+# Archivos de log
+*.log
+
+# Archivos ocultos del sistema
+.DS_Store
+
+# Archivos temporales de editores
+*.swp
+*.swo
+
+# Configuración local de herramientas
+.gcloud/
