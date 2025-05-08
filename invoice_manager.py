@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from tenacity import retry, wait_fixed, stop_after_attempt, retry_if_exception_type
 import requests.exceptions
 
-# Importar el gestor de almacenamiento en Supabase
-from supabase_storage_manager import SupabaseStorageManager
+# Importar el gestor de almacenamiento local
+from local_storage_manager import LocalStorageManager
 
 # Configurar logging
 logging.basicConfig(
@@ -229,24 +229,32 @@ def procesar_html_content(html_content):
 class InvoiceManager:
     """Clase para gestionar consultas y procesamiento de facturas sin dependencias de UI."""
     
-    def __init__(self, session=None):
+    def __init__(self, session, base_data_path=None, processed_ids_folder="processed_ids", backup_folder="processed_ids_backup"):
         """Inicializa el gestor de facturas.
         
         Args:
-            session (requests.Session, optional): Sesión de requests con las cookies autenticadas.
-                                               Si no se proporciona, se creará una nueva.
+            session (requests.Session, optional): Sesión de requests existente. 
+                                                Si no se proporciona, se creará una nueva.
+            base_data_path (str, optional): Ruta base para almacenamiento local de datos.
+            processed_ids_folder (str, optional): Nombre de la carpeta para IDs procesados.
+            backup_folder (str, optional): Nombre de la carpeta para backups de IDs.
         """
         self.session = session or requests.Session()
         if not self.session.headers.get('Content-Type'):
             self.session.headers.update({'Content-Type': 'application/json; charset=utf-8'})
-            
-        self.df_resultados_facturas = []
-        self.df_resultados_nc = []
-        self.errores = []
+        self.logger = logging.getLogger(__name__)
         self.df_facturas_final = None
         self.df_notas_final = None
         self.obras_lista = []
-        
+        self.df_resultados_facturas = []  # Inicializar como lista vacía
+        self.df_resultados_nc = []      # Inicializar como lista vacía
+        self.errores = []                 # Inicializar como lista vacía
+        self.local_storage_manager = LocalStorageManager(
+            base_data_path=base_data_path, 
+            processed_ids_dir=processed_ids_folder, 
+            backup_dir=backup_folder
+        )
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_fixed(5),
@@ -269,7 +277,7 @@ class InvoiceManager:
 
         # Consulta para Facturas (CFDI)
         data = {
-            "Estatus": "0",
+            "Estatus": "",
             "Residente": "",
             "Obra": obra_value,
             "Proveedor": "",
@@ -463,91 +471,79 @@ class InvoiceManager:
             if col in df_pagadas.columns:
                 # Convertir a datetime
                 df_pagadas[col] = pd.to_datetime(df_pagadas[col], format="%d/%m/%y %H:%M", errors='coerce')
-                # Formatear para Supabase, manejando NaT (Not a Time) que resultan de 'coerce'
-                # Usamos fillna(pd.NA) para convertir NaT a Nulos que Supabase pueda manejar mejor que un string 'NaT'
+                # Formatear para Supabase, manejando NaT
                 df_pagadas[col] = df_pagadas[col].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else pd.NA)
+
+        # Limpiar y convertir la columna 'total' a float
+        df_pagadas['total'] = pd.to_numeric(df_pagadas['total'].str.replace('[\\$,]', '', regex=True), errors='coerce')
 
         return df_pagadas
     
-    def filtrar_nuevas_facturas(self, df_pagadas, supabase_url=None, supabase_key=None, bucket_name="1facturas", backup_bucket_name="facturas_backup"):
-        """Filtra las facturas que no han sido procesadas anteriormente usando Supabase Storage.
-        
+    def filtrar_nuevas_facturas(self, df_pagadas):
+        """Filtra las facturas que no han sido procesadas anteriormente usando almacenamiento local.
+
         Args:
             df_pagadas (pd.DataFrame): DataFrame con facturas pagadas
-            supabase_url (str, optional): URL de la API de Supabase
-            supabase_key (str, optional): Clave de API de Supabase
-            bucket_name (str, optional): Nombre del bucket principal para los archivos JSON
-            backup_bucket_name (str, optional): Nombre del bucket para las copias de seguridad
-            
+
         Returns:
             pd.DataFrame: DataFrame con facturas nuevas
         """
-        # Verificar que se proporcionaron las credenciales de Supabase
-        if not supabase_url or not supabase_key:
-            # Intentar obtener de variables de entorno si no se proporcionaron directamente
-            import os
-            supabase_url = supabase_url or os.environ.get("SUPABASE_URL")
-            supabase_key = supabase_key or os.environ.get("SUPABASE_KEY")
-            
-            if not supabase_url or not supabase_key:
-                error_msg = "Error: Se requieren las credenciales de Supabase (URL y Key) para gestionar los IDs de facturas"
-                logger.error(error_msg)
-                raise ValueError(error_msg)
+        logger.info("Filtrando facturas nuevas usando almacenamiento local...")
         
+        # Usar LocalStorageManager con rutas por defecto
+        storage_manager = self.local_storage_manager
+
         try:
-            # Crear gestor de almacenamiento de Supabase
-            storage_manager = SupabaseStorageManager(
-                supabase_url=supabase_url,
-                supabase_key=supabase_key,
-                bucket_name=bucket_name,
-                backup_bucket_name=backup_bucket_name
-            )
-            
-            # Filtrar facturas nuevas usando el gestor de Supabase
-            df_nuevas, current_file = storage_manager.filter_new_invoices(df_pagadas)
-            
-            logger.info(f"Proceso completado. Archivo actual: {current_file}")
-            return df_nuevas
-            
+            storage_manager.backup_ids_file()  # Hacer backup antes de cualquier operación
+            processed_ids_set, _ = storage_manager.get_processed_ids()  # Desempaquetar la tupla
+            logger.info(f"IDs procesados cargados: {len(processed_ids_set)} IDs.")
+
         except Exception as e:
-            logger.error(f"Error al filtrar facturas nuevas con Supabase: {str(e)}")
-            # En caso de error, usar el método local como respaldo
-            return self._filtrar_nuevas_facturas_local(df_pagadas)
-            
-    def _filtrar_nuevas_facturas_local(self, df_pagadas):
-        """[MÉTODO DE RESPALDO] Filtra las facturas nuevas usando el sistema de archivos local.
-        Este método solo se usa como respaldo si falla la integración con Supabase.
+            logger.error(f"Error al interactuar con LocalStorageManager: {e}")
+            logger.warning("No se pudieron cargar los IDs procesados. Se considerarán todas las facturas como nuevas.")
+            processed_ids_set = set()
+
+        # Filtrar facturas cuyo UUID no esté en el conjunto de IDs procesados
+        # Asegurarse de que 'UUID' no tenga valores nulos o NaN antes de filtrar
+        df_pagadas_con_uuid = df_pagadas.dropna(subset=['xml_uuid'])
+        nuevas_facturas_df = df_pagadas_con_uuid[
+            ~df_pagadas_con_uuid['xml_uuid'].astype(str).isin(processed_ids_set)  # Usar processed_ids_set
+        ].copy()
+
+        logger.info(f"Facturas nuevas encontradas: {len(nuevas_facturas_df)}")
+
+        if not nuevas_facturas_df.empty:
+            nuevos_ids_procesados = set(nuevas_facturas_df['xml_uuid'].astype(str).tolist())
+            todos_ids_actualizados = processed_ids_set.union(nuevos_ids_procesados)  # Usar processed_ids_set
+            try:
+                storage_manager.update_processed_ids(list(todos_ids_actualizados))
+                logger.info(f"Archivo de IDs procesados actualizado con {len(nuevos_ids_procesados)} nuevos IDs.")
+            except Exception as e:
+                logger.error(f"Error al actualizar el archivo de IDs procesados: {e}")
+        
+        return nuevas_facturas_df
+
+    def procesar_y_consolidar_facturas(self, obras_lista, max_workers=None):
+        """Consulta, procesa y consolida facturas de varias obras.
         
         Args:
-            df_pagadas (pd.DataFrame): DataFrame con facturas pagadas
+            obras_lista (list): Lista de diccionarios con 'name' y 'value' de cada obra
+            max_workers (int, optional): Número máximo de trabajadores para consultas concurrentes
             
         Returns:
-            pd.DataFrame: DataFrame con facturas nuevas
+            dict: {'facturas': df_facturas, 'notas': df_notas, 'errores': errores}
         """
-        import datetime
+        # Consultar facturas
+        resultados = self.consultar_facturas(obras_lista, max_workers)
         
-        logger.warning("Utilizando método local (respaldo) para filtrar facturas nuevas")
-        
-        # Definir la ruta del archivo de registro local
-        registro_file = os.path.expanduser(
-            f'~/Downloads/facturas_hashlib_id_{datetime.datetime.now().strftime("%d%m%Y")}.json'
-        )
-        
-        # Leer el registro existente (si existe)
-        if os.path.exists(registro_file):
-            with open(registro_file, "r") as registro_entrada:
-                ids_procesados = set(json.load(registro_entrada))
-        else:
-            ids_procesados = set()
+        # Filtrar facturas pagadas
+        df_pagadas = self.filtrar_facturas_pagadas(resultados['facturas'])
         
         # Filtrar facturas nuevas
-        df_nuevas = df_pagadas[~df_pagadas['hash5'].isin(ids_procesados)].copy()
+        df_nuevas = self.filtrar_nuevas_facturas(df_pagadas)
         
-        # Actualizar el registro con los nuevos IDs
-        ids_procesados.update(df_nuevas['hash5'].tolist())
+        # Consolidar resultados
+        resultados['facturas'] = df_nuevas
+        resultados['notas'] = resultados['notas']
         
-        with open(registro_file, "w") as registro_salida:
-            json.dump(list(ids_procesados), registro_salida)
-        
-        logger.info(f"[LOCAL] Se encontraron {len(df_nuevas)} facturas nuevas de {len(df_pagadas)} facturas pagadas")
-        return df_nuevas
+        return resultados

@@ -26,3 +26,6 @@ venv/
 
 # Configuración local de herramientas
 .gcloud/
+
+# Jupyter notebooks
+.ipynb

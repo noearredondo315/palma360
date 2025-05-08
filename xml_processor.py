@@ -9,6 +9,8 @@ import io  # Import io for BytesIO
 
 # Configurar logging
 logger = logging.getLogger('xml_processor')
+# Establecer nivel a CRITICAL para evitar mostrar errores de parseo en la terminal
+logger.setLevel(logging.CRITICAL)
 
 class XMLProcessor:
     """Gestiona el procesamiento de archivos XML (ahora principalmente a través de métodos estáticos)."""
@@ -50,12 +52,12 @@ class XMLProcessor:
             emisor_node = root.find('.//cfdi:Emisor', namespace)
             rfc_emisor = emisor_node.attrib.get('Rfc', None) if emisor_node is not None else None
             if not rfc_emisor:
-                logger.warning(f"No se encontró RFC del Emisor en XML {xml_identifier}. brincando...")
+                logger.debug(f"No se encontró RFC del Emisor en XML {xml_identifier}. brincando...")
                 # Considerar si devolver DF vacío o permitir continuar
 
             conceptos_nodes = root.findall('.//cfdi:Concepto', namespace)
             if not conceptos_nodes:
-                logger.warning(f"El XML {xml_identifier} no contiene conceptos.")
+                logger.debug(f"El XML {xml_identifier} no contiene conceptos.")
                 return pd.DataFrame(columns=columnas_empty)
 
             # Buscar el nodo del emisor
