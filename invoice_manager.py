@@ -329,21 +329,60 @@ class InvoiceManager:
         """Versión asíncrona para consultar una factura.
         
         Args:
-            obra (dict): Diccionario con 'name' y 'value' de la obra
+            obra (dict): Diccionario con datos de la obra.
+                  Puede venir en formato nuevo {'d': '[{"IDObra":765,"Nombre":"Acabados..."}]'} 
+                  o en el formato antiguo {'name': 'Nombre Obra', 'value': '765'}
             
         Returns:
             tuple: (df_facturas, df_notas, obra, error)
         """
         try:
+            # Detectar el formato de entrada y extraer nombre e ID de la obra
+            obra_name = None
+            obra_value = None
+            
+            # Verificar si es el nuevo formato JSON
+            if 'd' in obra:
+                try:
+                    # Parsear el JSON contenido en la clave 'd'
+                    obra_data = json.loads(obra['d'])
+                    if isinstance(obra_data, list) and len(obra_data) > 0:
+                        # Tomar el primer elemento de la lista
+                        obra_item = obra_data[0]
+                        obra_name = obra_item.get('Nombre', '')
+                        obra_value = str(obra_item.get('IDObra', ''))
+                        
+                        # Actualizar el objeto obra para mantener compatibilidad
+                        obra = {
+                            'name': obra_name,
+                            'value': obra_value,
+                            'original_data': obra  # Guardar los datos originales por si se necesitan
+                        }
+                except Exception as e:
+                    logger.error(f"Error parseando JSON de obra: {str(e)}")
+                    return pd.DataFrame(), pd.DataFrame(), obra, f"Error en formato JSON: {str(e)}"
+            else:
+                # Formato anterior
+                obra_name = obra.get('Nombre', '')
+                obra_value = obra.get('IDObra', '')
+            
+            # Verificar que se hayan obtenido los datos necesarios
+            if not obra_name or not obra_value:
+                error_msg = "Formato de obra incorrecto o incompleto"
+                logger.error(error_msg)
+                return pd.DataFrame(), pd.DataFrame(), obra, error_msg
+            
             # Usamos un executor para ejecutar la función bloqueante en un hilo separado
             loop = asyncio.get_event_loop()
             df_facturas, df_nc = await loop.run_in_executor(
                 None,
-                lambda: self._realizar_consulta_facturas(obra['name'], obra['value'])
+                lambda: self._realizar_consulta_facturas(obra_name, obra_value)
             )
             return df_facturas, df_nc, obra, None
         except Exception as e:
-            error_msg = f"Error consultando la obra {obra['name']}: {str(e)}"
+            # Intentar obtener el nombre de la obra para el mensaje de error
+            obra_name = obra.get('name', str(obra))
+            error_msg = f"Error consultando la obra {obra_name}: {str(e)}"
             logger.error(error_msg)
             return pd.DataFrame(), pd.DataFrame(), obra, error_msg
     
