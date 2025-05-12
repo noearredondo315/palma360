@@ -474,6 +474,11 @@ class InvoiceManager:
                 # Formatear para Supabase, manejando NaT
                 df_pagadas[col] = df_pagadas[col].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else pd.NA)
 
+        # Agregar columna con la fecha de consulta actual
+        from datetime import datetime
+        fecha_actual = datetime.now()
+        df_pagadas['fecha_consulta'] = fecha_actual.strftime('%Y-%m-%d %H:%M:%S')
+
         # Limpiar y convertir la columna 'total' a float
         df_pagadas['total'] = pd.to_numeric(df_pagadas['total'].str.replace('[\\$,]', '', regex=True), errors='coerce')
 
