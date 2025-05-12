@@ -5,7 +5,7 @@ import hashlib
 import pandas as pd
 import xml.etree.ElementTree as ET
 from datetime import datetime
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, wait_fixed
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from concurrent.futures import ThreadPoolExecutor
 from xml_processor import XMLProcessor
 from tqdm.auto import tqdm
@@ -393,8 +393,8 @@ class XMLDownloader:
             return f"{hashlib.md5(url.encode()).hexdigest()}.xml"
 
     @retry(
-        stop=stop_after_attempt(2),  # Reducido a 2 reintentos 
-        wait=wait_fixed(1),  # Espera fija de 1 segundo
+        stop=stop_after_attempt(5),  # Reintentar hasta 5 veces
+        wait=wait_exponential(multiplier=1, min=2, max=30),  # Espera exponencial entre reintentos
         retry=retry_if_exception_type((requests.exceptions.RequestException,))  # Reintentar solo en errores de red
     )
     def _download_xml(self, url):
