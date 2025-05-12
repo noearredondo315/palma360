@@ -333,22 +333,21 @@ class Predictor:
         result_df = df_to_predict.copy()
         
         # Añadir las columnas de predicción manteniendo las columnas originales
-        # Solo se agregan 4 columnas adicionales como se requiere
-        result_df['subcategoria_predicha'] = original_format_predictions  # Subcategoria en formato original
-        result_df['categoria_id'] = categoria_id_predictions           # Categoria correspondiente
+        # Solo se agregan 3 columnas adicionales, la columna 'categoria_id' se mapea después
+        result_df['subcategoria'] = original_format_predictions  # Subcategoria en formato original
         result_df['encontrado_en_diccionario'] = found_in_dict_list     # Si estaba en el diccionario
         result_df['confianza_prediccion'] = predictions_confidence      # Porcentaje de confianza
         
         # Marcar filas como REVISION_MANUAL si la confianza es menor que el umbral
         revision_mask = result_df['confianza_prediccion'] < confidence_threshold
         if revision_mask.any():
-            result_df.loc[revision_mask, 'subcategoria_predicha'] = 'REVISION_MANUAL'
+            result_df.loc[revision_mask, 'subcategoria'] = 'REVISION_MANUAL'
 
-        # Guardar resultados
-        output_filename = f"facturas_predichas_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-        output_path = os.path.join(self.results_dir, output_filename)
-        result_df.to_excel(output_path, index=False)
-        print(f"\nPredicciones guardadas en: {output_path}")
+        # # Guardar resultados
+        # output_filename = f"inside_facturas_predichas_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        # output_path = os.path.join(self.results_dir, output_filename)
+        # result_df.to_excel(output_path, index=False)
+        # print(f"\nPredicciones guardadas en: {output_path}")
         
         # Estadísticas de predicción
         total_samples = len(result_df)
