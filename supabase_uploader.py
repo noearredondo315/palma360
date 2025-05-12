@@ -2,6 +2,13 @@ import os
 import pandas as pd
 from supabase import create_client
 import logging
+from dotenv import load_dotenv
+import os
+
+load_dotenv()  # Carga desde .env
+
+supabase_url = os.getenv("SUPABASE_URL")
+supabase_key = os.getenv("SUPABASE_KEY")
 
 # Configurar logging
 logging.basicConfig(

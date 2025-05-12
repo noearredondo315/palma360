@@ -8,9 +8,6 @@ __pycache__/
 env/
 venv/
 
-# Configuración de entorno local
-.env
-
 # Carpetas de checkpoints de Jupyter
 .ipynb_checkpoints/
 
