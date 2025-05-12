@@ -61,8 +61,8 @@ def main():
     obras_lista = auth_result.get('obras', [])
     
     # Limitar a 3 obras para la prueba
-    # obras_prueba = obras_lista[:25] if len(obras_lista) > 25 else obras_lista
-    obras_prueba = obras_lista
+    obras_prueba = obras_lista[:20] if len(obras_lista) > 20 else obras_lista
+    # obras_prueba = obras_lista
     # 2. Inicializar gestor de facturas
     invoice_manager = InvoiceManager(session, base_data_path=APP_DATA_DIR)
     
