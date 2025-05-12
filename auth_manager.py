@@ -2,13 +2,6 @@ import os
 import json
 import time
 import requests
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service as ChromeService
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
 from bs4 import BeautifulSoup
 import logging
 
@@ -35,10 +28,30 @@ class ProgressReporter:
         """Reporta un error en una operación."""
         logger.error(f"Error: {message}")
 
+# URLs para requests
+BASE_URL = "https://palmaterraproveedores.centralinformatica.com/"
+URL_OBRAS = BASE_URL + "WSUnico.asmx/filtroObra"
+
+def extraer_campos_ocultos(html):
+    """
+    Extrae los campos ocultos del formulario HTML para el login.
+    
+    Args:
+        html: Contenido HTML de la página
+        
+    Returns:
+        Diccionario con los campos ocultos y sus valores
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    data = {}
+    for inp in soup.select("input[type=hidden][name]"):
+        data[inp['name']] = inp.get('value', '')
+    return data
+
 def obtener_obras_y_residentes(username=None, password=None, reporter=None):
     """
-    Función que utiliza Selenium y BeautifulSoup para iniciar sesión en el portal
-    y obtener la lista de obras y residentes disponibles.
+    Función que utiliza requests y BeautifulSoup para iniciar sesión en el portal
+    y obtener la lista de obras disponibles.
     
     Args:
         username: Nombre de usuario para el login (opcional, usa FIXED_USERNAME si es None)
@@ -46,7 +59,7 @@ def obtener_obras_y_residentes(username=None, password=None, reporter=None):
         reporter: Objeto opcional para reportar progreso (debe implementar report_progress y report_error)
         
     Returns:
-        Diccionario con {'obras': [...], 'residentes': [...], 'cookies': {...}}
+        Diccionario con {'obras': [...], 'cookies': {...}}
     """
     # Usar credentials fijas si no se proporcionan
     username = username or FIXED_USERNAME
@@ -56,83 +69,56 @@ def obtener_obras_y_residentes(username=None, password=None, reporter=None):
     if reporter is None:
         reporter = ProgressReporter()
     
-    options = Options()
-    options.add_argument("--headless")
-    options.add_argument("--window-size=1920,1080")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-
-    service = ChromeService(executable_path=ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
-
-    obras = []
-    residentes = []
-    cookies = {}
-
     try:
-        # Paso 1: Ingresar a la web
-        driver.get("https://palmaterraproveedores.centralinformatica.com/")
+        # Crear sesión de requests
+        session = requests.Session()
+        
+        # Paso 1: GET inicial para extraer campos ocultos
         reporter.report_progress(1, "Ingresando a la web...")
-
-        # Paso 2: Ingresando usuario y contraseña
-        WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.XPATH, "//input[@placeholder='Usuario..']")))
-        WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.XPATH, "//input[@placeholder='Contraseña..']")))
-        username_input = driver.find_element(By.XPATH, "//input[@placeholder='Usuario..']") 
-        password_input = driver.find_element(By.XPATH, "//input[@placeholder='Contraseña..']") 
-        username_input.send_keys(username)
-        password_input.send_keys(password)
-
-        login_button = driver.find_element(By.ID, "Button1")
-        login_button.click()
+        resp = session.get(BASE_URL, timeout=30)
+        resp.raise_for_status()
+        data = extraer_campos_ocultos(resp.text)
+        
+        # Paso 2: POST login
         reporter.report_progress(2, "Verificando credenciales...")
-
+        data.update({
+            "txtUsuario": username,
+            "txtPassword": password,
+            "Button1": "Entrar",
+        })
+        resp = session.post(BASE_URL, data=data, timeout=30)
+        resp.raise_for_status()
+        
         # Verificar si el inicio de sesión fue exitoso
-        try:
-            WebDriverWait(driver, 5).until(EC.presence_of_element_located((By.ID, "liConsulta")))
-        except Exception:
-            # Si no aparece el elemento esperado, asumir que las credenciales son incorrectas
+        if "liConsulta" not in resp.text:
             reporter.report_error("Usuario o contraseña incorrectos. Verifique sus credenciales.")
-            driver.quit()
-            return {'obras': obras, 'residentes': residentes, 'cookies': cookies}
-
-        # Paso 3: Entrando a la sección de consulta
-        consulta_button = driver.find_element(By.ID, "liConsulta")
-        consulta_button.click()
-        reporter.report_progress(3, "Entrando a la sección de consulta...")
-
-        # Paso 4: Obteniendo residentes y obras
-        WebDriverWait(driver, 5).until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "#txtObras option")) > 1)
-        WebDriverWait(driver, 5).until(lambda d: len(d.find_elements(By.CSS_SELECTOR, "#txtResidente option")) > 1)
-        page_html = driver.page_source
-        soup = BeautifulSoup(page_html, "html.parser")
-
-        obras_select = soup.find("select", {"id": "txtObras"})
-        if obras_select:
-            obras = [{"value": option.get("value", "").strip(), "name": option.text.strip()} for option in
-                     obras_select.find_all("option") if option.get("value", "").strip()]
-
-        residentes_select = soup.find("select", {"id": "txtResidente"})
-        if residentes_select:
-            residentes = [{"value": option.get("value", "").strip(), "name": option.text.strip()} for option in
-                          residentes_select.find_all("option") if option.get("value", "").strip()]
-
-        # Emitir progreso al completar
-        reporter.report_progress(4, "Obteniendo residentes y obras...")
-
-        cookies = {cookie['name']: cookie['value'] for cookie in driver.get_cookies()}
-
+            return {'obras': [], 'cookies': {}}
+        
+        # Paso 3: Headers comunes para AJAX
+        reporter.report_progress(3, "Consultando obras disponibles...")
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "X-Requested-With": "XMLHttpRequest"
+        }
+        
+        # Paso 4: POST a filtroObra
+        obras_resp = session.post(URL_OBRAS, headers=headers, json={}, timeout=30)
+        obras = json.loads(obras_resp.json()["d"])
+        
+        reporter.report_progress(4, "Proceso completado exitosamente.")
+        
+        return {
+            "obras": obras,
+            "cookies": session.cookies.get_dict(),
+        }
+        
     except Exception as e:
         reporter.report_error(f"Ocurrió un error: {str(e)}")
-    finally:
-        driver.quit()
-
-    return {'obras': obras, 'residentes': residentes, 'cookies': cookies}
+        return {'obras': [], 'cookies': {}}
 
 class AuthManager:
     """
-    Clase simplificada para autenticación en entorno web sin dependencias de UI.
+    Clase simplificada para autenticación en entorno web usando requests sin dependencias de UI.
     """
     def __init__(self):
         self.reporter = ProgressReporter()
@@ -143,7 +129,7 @@ class AuthManager:
     
     def iniciar_sesion(self):
         """
-        Inicia el proceso de inicio de sesión y carga de obras y residentes.
+        Inicia el proceso de inicio de sesión y carga de obras.
         Retorna directamente el resultado sin usar hilos ni componentes UI.
         """
         username, password = self.obtener_credenciales()
