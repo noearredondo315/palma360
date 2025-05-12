@@ -12,6 +12,8 @@ from xml_processor import XMLProcessor
 from local_storage_manager import LocalStorageManager
 from prediction_service import run_prediction_pipeline
 from collections import defaultdict
+from supabase_uploader import SupabaseUploader
+from utils import limpiar_uuid_dataframe
 
 # Configurar logging
 logging.basicConfig(
@@ -59,8 +61,8 @@ def main():
     obras_lista = auth_result.get('obras', [])
     
     # Limitar a 3 obras para la prueba
-    obras_prueba = obras_lista[:7] if len(obras_lista) > 7 else obras_lista
-    # obras_prueba = obras_lista
+    # obras_prueba = obras_lista[:25] if len(obras_lista) > 25 else obras_lista
+    obras_prueba = obras_lista
     # 2. Inicializar gestor de facturas
     invoice_manager = InvoiceManager(session, base_data_path=APP_DATA_DIR)
     
@@ -72,6 +74,21 @@ def main():
         # 4. Filtrar facturas pagadas
         print("\nFiltrando facturas pagadas...")
         df_pagadas = invoice_manager.filtrar_facturas_pagadas(resultados["facturas"])
+        
+        # 4.1 Cargar facturas pagadas a Supabase
+        print("\nCargando facturas pagadas a Supabase...")
+        try:
+            # Inicializar el uploader de Supabase con las credenciales del entorno
+            supabase_uploader = SupabaseUploader()
+            # Cargar las facturas pagadas a Supabase
+            df_pagadas = limpiar_uuid_dataframe(df_pagadas)
+            df_pagadas = df_pagadas.drop_duplicates(subset='xml_uuid')
+            # df_pagadas.to_excel(os.path.join(RESULTS_DIR, "duplicados_facturas_pagadas.xlsx"))
+            resultado_supabase = supabase_uploader.cargar_facturas_pagadas(df_pagadas)
+            print(f"Facturas cargadas a Supabase: {resultado_supabase['count']}")
+        except Exception as e:
+            print(f"Error al cargar facturas a Supabase: {str(e)}")
+            logging.error(f"Error al cargar facturas a Supabase: {str(e)}")
         
         # 5. Verificar facturas nuevas
         print("\nComprobando facturas nuevas...")
@@ -85,26 +102,20 @@ def main():
         print(f"\nFacturas pagadas: {len(df_pagadas)}")
         print(f"Facturas nuevas: {len(df_nuevas)}")
         
-        # Guardar a Pickle las facturas nuevas
-        if not df_nuevas.empty:
-            filename_nuevas = f"facturas_nuevas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
-            pickle_path_nuevas = os.path.join(RESULTS_DIR, filename_nuevas)
-            df_nuevas.to_pickle(pickle_path_nuevas)
-            print(f"Facturas nuevas guardadas en: {pickle_path_nuevas}")
+        # # Guardar a Pickle las facturas nuevas
+        # if not df_nuevas.empty:
+        #     filename_nuevas = f"facturas_nuevas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+        #     pickle_path_nuevas = os.path.join(RESULTS_DIR, filename_nuevas)
+        #     df_nuevas.to_pickle(pickle_path_nuevas)
+        #     print(f"Facturas nuevas guardadas en: {pickle_path_nuevas}")
             
-        # Guardar a Pickle las facturas pagadas con columnas específicas
-        if not df_pagadas.empty:
-            # Crear una copia del DataFrame y seleccionar solo las columnas requeridas
-            df_update = df_pagadas[['estatus', 'tipo_gasto','obra', 'fecha_pagada', 'xml_uuid']].copy()
-            df_pagadas_export = df_pagadas.copy()
-            filename_pagadas = f"facturas_concentrado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
-            filename_update = f"facturas_update_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
-            pickle_path_pagadas = os.path.join(RESULTS_DIR, filename_pagadas)
-            pickle_path_update = os.path.join(RESULTS_DIR, filename_update)
-            df_pagadas_export.to_pickle(pickle_path_pagadas)
-            df_update.to_pickle(pickle_path_update)
-            print(f"Facturas pagadas guardadas en: {pickle_path_pagadas}")
-            print(f"Facturas update guardadas en: {pickle_path_update}")
+        # # Guardar a Pickle las facturas pagadas con columnas específicas
+        # if not df_pagadas.empty:
+        #     df_pagadas_export = df_pagadas.copy()
+        #     filename_pagadas = f"facturas_concentrado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+        #     pickle_path_pagadas = os.path.join(RESULTS_DIR, filename_pagadas)
+        #     df_pagadas_export.to_pickle(pickle_path_pagadas)
+        #     print(f"Facturas pagadas guardadas en: {pickle_path_pagadas}")
             
         # 6. Descargar XMLs de facturas nuevas y almacenarlos localmente
         if len(df_nuevas) > 0:
@@ -248,6 +259,10 @@ def main():
                             if 'clave_producto' in final_processed_df.columns:
                                 final_processed_df['sat'] = final_processed_df['clave_producto'].map(sat_descriptions).str.lower()
                                 logger.info(f"Columna 'sat' añadida al DataFrame con descripciones del catálogo SAT.")
+                                # Agregar columna uuid_concepto como UUID v5 único
+                                from utils import concept_uuid5
+                                final_processed_df['uuid_concepto'] = final_processed_df.apply(concept_uuid5, axis=1)
+                                logger.info(f"Columna 'uuid_concepto' añadida al DataFrame como UUID v5 único para cada concepto.")
                             else:
                                 logger.warning(f"No se encontró la columna 'CLAVE PROD.' en el DataFrame. No se pudo añadir la columna 'sat'.")
                         except Exception as e:
@@ -255,11 +270,12 @@ def main():
                     else:
                         logger.warning(f"No se encontró el archivo del catálogo SAT en {sat_path}. No se añadió la columna 'sat'.")
                     
-                    # Guardar el DataFrame procesado final
-                    processed_filename = f"xml_data_procesado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
-                    processed_pickle_path = os.path.join(RESULTS_DIR, processed_filename)
-                    final_processed_df.to_pickle(processed_pickle_path)
-                    print(f"Datos XML procesados guardados en: {processed_pickle_path}")
+
+                    # # Guardar el DataFrame procesado final
+                    # processed_filename = f"xml_data_procesado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+                    # processed_pickle_path = os.path.join(RESULTS_DIR, processed_filename)
+                    # final_processed_df.to_pickle(processed_pickle_path)
+                    # print(f"Datos XML procesados guardados en: {processed_pickle_path}")
                     
                     # Ejecutar predicción sobre los datos procesados
                     print("\nIniciando proceso de predicción automática...")
@@ -273,6 +289,40 @@ def main():
                         )
                         if predicted_df is not None:
                             print("Predicción completada exitosamente.")
+                            # Definir columnas explícitamente
+                            columnas_a_sumar = [
+                                'cantidad', 'subtotal', 'descuento', 'venta_tasa_0', 'venta_tasa_16',
+                                'total_iva', 'retencion_iva', 'retencion_isr', 'total_ish', 'total'
+                            ]
+                            columnas_a_conservar = [
+                                'obra', 'cuenta_gasto', 'proveedor', 'residente', 'folio', 'estatus',
+                                'fecha_factura', 'fecha_recepcion', 'fecha_pagada', 'fecha_autorizacion',
+                                'clave_producto', 'clave_unidad', 'descripcion', 'unidad', 'precio_unitario',
+                                'moneda', 'serie', 'url_pdf', 'url_oc', 'url_rem', 'xml_uuid', 'encontrado_en_diccionario',
+                                'confianza_prediccion', 'subcategoria', 'sat', 'tipo_gasto'# Añadidas para preservar las predicciones
+                            ]
+
+                            # Mapear categorías
+                            predicted_df = supabase_uploader.map_categoria(predicted_df)
+
+                            # Agrupar
+                            predicted_df = predicted_df.groupby(
+                                ['uuid_concepto'], as_index=False
+                            ).agg(
+                                {
+                                    **{col: 'sum' for col in columnas_a_sumar},
+                                    **{col: 'first' for col in columnas_a_conservar}
+                                }
+                            )
+
+                            # Subir predicciones a Supabase
+                            supabase_uploader.subir_predicciones_portal_desglosado(predicted_df)
+                            # # Guardar el DataFrame procesado final
+                            # predicted_filename = f"2facturas_predicciones_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                            # predicted_path = os.path.join(RESULTS_DIR, predicted_filename)
+                            # predicted_df.to_excel(predicted_path)
+                            # print(f"Datos predicciones guardados en: {predicted_path}")
+                            
                         else:
                             print("No se pudo completar la predicción. Consulte los logs para más detalles.")
                     except Exception as e:
