@@ -14,6 +14,9 @@ from prediction_service import run_prediction_pipeline
 from collections import defaultdict
 from supabase_uploader import SupabaseUploader
 from utils import limpiar_uuid_dataframe
+from langchain_openai import OpenAIEmbeddings
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Configurar logging
 logging.basicConfig(
@@ -62,7 +65,7 @@ def main():
     # print (obras_lista)
     
     # Limitar a 3 obras para la prueba
-    # obras_prueba = obras_lista[:20] if len(obras_lista) > 20 else obras_lista
+    # obras_prueba = obras_lista[:3] if len(obras_lista) > 3 else obras_lista
     obras_prueba = obras_lista
     # 2. Inicializar gestor de facturas
     invoice_manager = InvoiceManager(session, base_data_path=APP_DATA_DIR)
@@ -300,7 +303,7 @@ def main():
                                 'fecha_factura', 'fecha_recepcion', 'fecha_pagada', 'fecha_autorizacion',
                                 'clave_producto', 'clave_unidad', 'descripcion', 'unidad', 'precio_unitario',
                                 'moneda', 'serie', 'url_pdf', 'url_oc', 'url_rem', 'xml_uuid', 'encontrado_en_diccionario',
-                                'confianza_prediccion', 'subcategoria', 'sat', 'tipo_gasto'# Añadidas para preservar las predicciones
+                                'confianza_prediccion', 'categoria_id','subcategoria', 'sat', 'tipo_gasto'# Añadidas para preservar las predicciones
                             ]
 
                             # Mapear categorías
@@ -316,14 +319,29 @@ def main():
                                 }
                             )
 
+                            embeddings = OpenAIEmbeddings(model="text-embedding-3-small", request_timeout=30)
+
+                            # 4️⃣ Generar embeddings **después** del groupby
+                            texto_para_embedding = (
+                                "obra: "         + predicted_df["obra"].fillna("").str.lower() + " | " +
+                                "proveedor: "    + predicted_df["proveedor"].fillna("").str.lower() + " | " +
+                                "categoria: "    + predicted_df["categoria_id"].fillna("").str.lower() + " | " +
+                                "subcategoria: " + predicted_df["subcategoria"].fillna("").str.lower() + " | " +
+                                                predicted_df["descripcion"].fillna("").str.lower()
+                            ).tolist()
+
+
+                            BATCH = 1000
+                            vectores = []
+                            for i in range(0, len(texto_para_embedding), BATCH):
+                                vectores.extend(embeddings.embed_documents(texto_para_embedding[i:i+BATCH]))
+
+                            predicted_df["embedding"] = vectores
+
+                            # print(predicted_df.iloc[:5, -3:])
                             # Subir predicciones a Supabase
                             supabase_uploader.subir_predicciones_portal_desglosado(predicted_df)
-                            # # Guardar el DataFrame procesado final
-                            # predicted_filename = f"2facturas_predicciones_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
-                            # predicted_path = os.path.join(RESULTS_DIR, predicted_filename)
-                            # predicted_df.to_excel(predicted_path)
-                            # print(f"Datos predicciones guardados en: {predicted_path}")
-                            
+
                         else:
                             print("No se pudo completar la predicción. Consulte los logs para más detalles.")
                     except Exception as e:
