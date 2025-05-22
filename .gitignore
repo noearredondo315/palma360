@@ -27,6 +27,5 @@ venv/
 
 # Jupyter notebooks
 .ipynb
-
 # Archivos Excel
 .xlsx
