@@ -1,0 +1,10 @@
+pandas
+python-dotenv
+requests
+selenium
+webdriver-manager
+beautifulsoup4
+tenacity
+# supabase # Eliminado
+tqdm
+openpyxl
