@@ -58,7 +58,7 @@ class SupabaseUploader:
             registros = df_temp.to_dict(orient="records")
             
             # Procesar en lotes para evitar payloads demasiado grandes
-            batch_size = 500  # Ajusta este tamaño según sea necesario
+            batch_size = 1000  # Ajusta este tamaño según sea necesario
             total_registros = len(registros)
             total_procesados = 0
             total_exito = 0

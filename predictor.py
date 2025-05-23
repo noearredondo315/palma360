@@ -19,6 +19,7 @@ import joblib
 import torch
 import unicodedata
 from scipy.sparse import hstack as sparse_hstack
+from tqdm import tqdm
 from sentence_transformers import SentenceTransformer
 from sklearn.feature_extraction.text import TfidfVectorizer
 
@@ -234,7 +235,7 @@ class Predictor:
 
         # Verificar si hay coincidencias exactas en el diccionario
         print("Verificando coincidencias exactas en el diccionario...")
-        for idx, row in new_data_processed.iterrows():
+        for idx, row in tqdm(new_data_processed.iterrows(), desc="Verificando coincidencias", unit="item", total=len(new_data_processed)):
             desc = row['descripcion']
             prov = row['proveedor']
             sat_code = row['sat']

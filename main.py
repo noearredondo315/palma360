@@ -65,7 +65,7 @@ def main():
     # print (obras_lista)
     
     # Limitar a 3 obras para la prueba
-    obras_prueba = obras_lista[:50] if len(obras_lista) > 50 else obras_lista
+    obras_prueba = obras_lista[:40] if len(obras_lista) > 40 else obras_lista
     # obras_prueba = obras_lista
     # 2. Inicializar gestor de facturas
     invoice_manager = InvoiceManager(session, base_data_path=APP_DATA_DIR)
@@ -333,8 +333,10 @@ def main():
 
                             BATCH = 2000
                             vectores = []
-                            for i in range(0, len(texto_para_embedding), BATCH):
-                                vectores.extend(embeddings.embed_documents(texto_para_embedding[i:i+BATCH]))
+                            total_batches = (len(texto_para_embedding) + BATCH - 1) // BATCH  # Calcula el número total de batches
+                            for i in tqdm(range(0, len(texto_para_embedding), BATCH), desc="Generando embeddings", total=total_batches, unit="batch"):
+                                batch_actual = texto_para_embedding[i:i+BATCH]
+                                vectores.extend(embeddings.embed_documents(batch_actual))
 
                             predicted_df["embedding"] = vectores
 
