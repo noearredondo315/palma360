@@ -21,12 +21,145 @@ logger = logging.getLogger('supabase_uploader')
 class SupabaseUploader:
     """Clase para gestionar la carga de datos a Supabase."""
 
+    def guardar_lote_fallido(self, batch, lote_num):
+        """
+        Guarda un lote fallido en formato JSON para reintento posterior.
+        
+        Args:
+            batch (list): Lista de registros del lote fallido
+            lote_num (int): Número del lote
+            
+        Returns:
+            str: Ruta donde se guardó el archivo JSON
+        """
+        import os
+        import json
+        from datetime import datetime
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        carpeta = "lotes_fallidos"
+        os.makedirs(carpeta, exist_ok=True)
+        ruta = os.path.join(carpeta, f"lote_{lote_num:03d}_{timestamp}.json")
+        
+        with open(ruta, "w", encoding="utf-8") as f:
+            json.dump(batch, f, ensure_ascii=False, indent=2)
+        
+        logger.warning(f"Lote {lote_num} guardado en {ruta} para reintento posterior")
+        return ruta
+        
+    def reintentar_lotes_fallidos(self):
+        """
+        Reintenta la carga de todos los lotes fallidos guardados en la carpeta 'lotes_fallidos'.
+        Utiliza tenacity para realizar reintentos automáticos en caso de fallos de conexión.
+        
+        Returns:
+            dict: Resultado de los reintentos
+        """
+        import os
+        import json
+        import glob
+        from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+        import requests
+        
+        carpeta = "lotes_fallidos"
+        if not os.path.exists(carpeta):
+            logger.info("No hay carpeta de lotes fallidos para reintentar")
+            return {"message": "No hay lotes fallidos para reintentar", "count": 0}
+        
+        archivos_json = glob.glob(os.path.join(carpeta, "*.json"))
+        if not archivos_json:
+            logger.info("No hay archivos de lotes fallidos para reintentar")
+            return {"message": "No hay lotes fallidos para reintentar", "count": 0}
+        
+        logger.info(f"Encontrados {len(archivos_json)} archivos de lotes fallidos para reintentar")
+        
+        # Definir función de inserción con reintentos
+        @retry(
+            stop=stop_after_attempt(5),
+            wait=wait_exponential(multiplier=1, min=4, max=60),
+            retry=retry_if_exception_type((requests.exceptions.RequestException,))
+        )
+        def insertar_con_reintentos(batch, nombre_archivo):
+            """Insertar lote con reintentos automáticos"""
+            response = (
+                self.supabase.table("portal_desglosado")
+                .insert(batch)
+                .execute()
+            )
+            return response
+        
+        # Resultados
+        resultados = {
+            "total": len(archivos_json),
+            "exito": 0,
+            "error": 0,
+            "detalle": []
+        }
+        
+        # Procesar cada archivo de lote fallido
+        for archivo in archivos_json:
+            nombre_archivo = os.path.basename(archivo)
+            logger.info(f"Reintentando carga del lote fallido: {nombre_archivo}")
+            
+            try:
+                # Cargar datos del archivo JSON
+                with open(archivo, "r", encoding="utf-8") as f:
+                    batch = json.load(f)
+                
+                # Reintentar inserción con manejo automático de reintentos
+                try:
+                    response = insertar_con_reintentos(batch, nombre_archivo)
+                    
+                    # Verificar respuesta
+                    if hasattr(response, 'data') and response.data:
+                        registros_exito = len(response.data)
+                        logger.info(f"Reintento exitoso para {nombre_archivo}: {registros_exito} registros cargados")
+                        
+                        # Renombrar archivo para indicar que fue procesado exitosamente
+                        archivo_procesado = archivo.replace('.json', '.procesado.json')
+                        os.rename(archivo, archivo_procesado)
+                        
+                        resultados["exito"] += 1
+                        resultados["detalle"].append({
+                            "archivo": nombre_archivo,
+                            "estado": "exito",
+                            "registros": registros_exito
+                        })
+                    else:
+                        raise Exception("Respuesta sin datos claros de éxito")
+                        
+                except Exception as retry_error:
+                    logger.error(f"Error en reintento de {nombre_archivo} después de múltiples intentos: {str(retry_error)}")
+                    resultados["error"] += 1
+                    resultados["detalle"].append({
+                        "archivo": nombre_archivo,
+                        "estado": "error",
+                        "error": str(retry_error)
+                    })
+            except Exception as e:
+                logger.error(f"Error al procesar archivo {nombre_archivo}: {str(e)}")
+                resultados["error"] += 1
+                resultados["detalle"].append({
+                    "archivo": nombre_archivo,
+                    "estado": "error_procesamiento",
+                    "error": str(e)
+                })
+        
+        # Resumen final
+        if resultados["exito"] > 0:
+            logger.info(f"Reintento completado: {resultados['exito']} lotes exitosos, {resultados['error']} con error")
+        else:
+            logger.warning(f"Reintento completado sin éxito: {resultados['error']} lotes con error")
+            
+        return resultados
+
     def subir_predicciones_portal_desglosado(self, df_predicciones):
         """
         Inserta todos los registros del DataFrame en la tabla portal_desglosado de Supabase.
         No realiza comparación ni actualización, solo inserción masiva.
         Convierte automáticamente columnas con objetos uuid.UUID a string.
         Procesa los datos en lotes para evitar errores de tamaño de payload.
+        Guarda lotes fallidos en disco para reintento posterior.
         
         Args:
             df_predicciones (pd.DataFrame): DataFrame con las predicciones a subir
@@ -63,6 +196,7 @@ class SupabaseUploader:
             total_procesados = 0
             total_exito = 0
             total_error = 0
+            lotes_fallidos = []
             
             logger.info(f"Iniciando carga de {total_registros} registros en lotes de {batch_size}")
             
@@ -92,16 +226,36 @@ class SupabaseUploader:
                     
                 except Exception as batch_error:
                     logger.error(f"Error al cargar lote {batch_num}: {str(batch_error)}")
+                    ruta_guardado = self.guardar_lote_fallido(batch, batch_num)
+                    lotes_fallidos.append({
+                        "lote": batch_num,
+                        "registros": len(batch),
+                        "ruta": ruta_guardado,
+                        "error": str(batch_error)
+                    })
                     total_error += len(batch)
             
             logger.info(f"Carga completa: {total_exito} exitosos, {total_error} con error de un total de {total_registros}")
+            
+            resultados_reintentos = None
+            if lotes_fallidos:
+                logger.warning(f"Se guardaron {len(lotes_fallidos)} lotes fallidos para reintento posterior")
+                logger.info("Iniciando reintentos automáticos para lotes fallidos...")
+                resultados_reintentos = self.reintentar_lotes_fallidos()
+                
+                if resultados_reintentos.get("exito", 0) > 0:
+                    total_exito += resultados_reintentos.get("exito", 0)
+                    total_error -= resultados_reintentos.get("exito", 0)
+                    logger.info(f"Reintentos completados: {resultados_reintentos['exito']} lotes recuperados")
             
             return {
                 "message": "Predicciones cargadas exitosamente en portal_desglosado",
                 "count": total_procesados,
                 "exito": total_exito,
                 "error": total_error,
-                "total": total_registros
+                "total": total_registros,
+                "lotes_fallidos": lotes_fallidos,
+                "resultados_reintentos": resultados_reintentos
             }
         except Exception as e:
             logger.error(f"Error al cargar predicciones en portal_desglosado: {e}")
