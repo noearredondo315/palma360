@@ -331,7 +331,7 @@ def main():
                             ).tolist()
 
 
-                            BATCH = 1000
+                            BATCH = 2000
                             vectores = []
                             for i in range(0, len(texto_para_embedding), BATCH):
                                 vectores.extend(embeddings.embed_documents(texto_para_embedding[i:i+BATCH]))
