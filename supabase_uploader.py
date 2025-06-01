@@ -4,7 +4,7 @@ from supabase import create_client
 import logging
 from dotenv import load_dotenv
 import os
-
+from supabase.lib.client_options import ClientOptions
 load_dotenv()  # Carga desde .env
 
 supabase_url = os.getenv("SUPABASE_URL")
@@ -191,7 +191,7 @@ class SupabaseUploader:
             registros = df_temp.to_dict(orient="records")
             
             # Procesar en lotes para evitar payloads demasiado grandes
-            batch_size = 500  # Ajusta este tamaño según sea necesario
+            batch_size = 100  # Ajusta este tamaño según sea necesario
             total_registros = len(registros)
             total_procesados = 0
             total_exito = 0
@@ -277,6 +277,7 @@ class SupabaseUploader:
             raise ValueError("Se requieren URL y clave de Supabase. Proporciónalas como parámetros o configura variables de entorno.")
 
         # Inicializar cliente de Supabase
+        client_options = ClientOptions(timeout=120)  # Aumentado a 120 segundos
         self.supabase = create_client(self.url, self.key)
         logger.info("Cliente Supabase inicializado correctamente")
 
