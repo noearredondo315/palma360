@@ -490,7 +490,7 @@ class SupabaseUploader:
         """
         try:
             # Obtener el mapeo de subcategorías a categoria_id desde Supabase
-            logger.info("Consultando registros existentes en Supabase para comparación...")
+            logger.info(f"Consultando registros existentes en Supabase para comparación...| Filas a mapear: {len(df)}")
             response = self.supabase.table('categorias_subcategorias').select('subcategoria, categoria_id').execute()
             categoria_mapping = {row['subcategoria']: row['categoria_id'] for row in response.data}
 
