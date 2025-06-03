@@ -46,6 +46,7 @@ MODEL_DIR = os.path.join(APP_DATA_DIR, "model")
 RESULTS_DIR = os.path.join(APP_DATA_DIR, "resultados")
 # 4. Construye la ruta completa al pickle
 sat_path = os.path.join(MODEL_DIR, "catalogoCFDI4_sat.pkl")
+print("¿Existe?", os.path.exists(sat_path))
 
 
 # ----------------------------------
