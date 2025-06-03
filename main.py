@@ -35,9 +35,18 @@ APP_DATA_DIR = os.path.abspath("data") # Directorio 'data' relativo a la ubicaci
 RESULTS_DIR = os.path.join(DOWNLOADS_DIR, "resultados") # Directorio para los archivos .pkl
 MODEL_DIR   = os.path.join(DOWNLOADS_DIR, "model") # Directorio para los archivos .pkl
 
+
+# 1. Obtén la carpeta donde está este script (p.ej. /home/noearredondo/palma360)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 2. Define la carpeta 'data' relativa a BASE_DIR
+APP_DATA_DIR = os.path.join(BASE_DIR, "data")
+#    Esto siempre será -> /home/noearredondo/palma360/data
+# 3. Define la carpeta 'model' dentro de DATA_DIR
+MODEL_DIR = os.path.join(APP_DATA_DIR, "model")
+RESULTS_DIR = os.path.join(APP_DATA_DIR, "resultados")
+# 4. Construye la ruta completa al pickle
 sat_path = os.path.join(MODEL_DIR, "catalogoCFDI4_sat.pkl")
-print("Buscando pickle en:", sat_path)
-print("¿Existe?", os.path.exists(sat_path))
+
 
 # ----------------------------------
 
@@ -257,7 +266,7 @@ def main():
                     os.makedirs(MODEL_DIR, exist_ok=True)
                     
                     # Cargar el catálogo SAT desde archivo pickle
-                    sat_path = os.path.join(MODEL_DIR, "catalogoCFDI4_sat.pkl")
+                    # sat_path = os.path.join(MODEL_DIR, "catalogoCFDI4_sat.pkl")
                     if os.path.exists(sat_path):
                         try:
                             # Cargar el diccionario de descripciones SAT desde el archivo pickle
