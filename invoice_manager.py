@@ -118,10 +118,13 @@ def procesar_notas_credito(html_content):
             obra = limpiar_texto(cells[0].get_text(strip=True)) if len(cells) > 0 else "-"
             proveedor = limpiar_texto(cells[1].get_text(strip=True)) if len(cells) > 1 else "-"
             encargado = limpiar_texto(cells[2].get_text(strip=True)) if len(cells) > 2 else "-"
+            numero = limpiar_texto(cells[3].get_text(strip=True)) if len(cells) > 3 else "-"
+
 
             # Variables para guardar los enlaces
             nc_pdf_link = None
             nc_xml_link = None
+            xml_uuid = None
             fechas = {}
 
             # Buscar enlaces en la fila
@@ -143,16 +146,21 @@ def procesar_notas_credito(html_content):
                 if texto_enlace == "XML":
                     if "disabled" not in clase and onclick:
                         nc_xml_link = procesar_enlace(onclick, clase)
+                        xml_uuid = extraer_uuid(onclick, clase)
+            
+
 
             # Si se detecta un enlace NC válido, crear una fila para la nota de crédito
             if nc_pdf_link or nc_xml_link:
                 notas_credito_data.append({
-                    "Obra": obra,
-                    "Proveedor": proveedor,
-                    "Residente": encargado,
-                    "Número": "",
-                    "Estatus": "Nota de crédito",
-                    "XML": nc_xml_link if nc_xml_link else None,
+                    "obra": obra,
+                    "proveedor": proveedor,
+                    "residente": encargado,
+                    "folio": numero,
+                    "estatus": "Nota de crédito",
+                    "url_xml": nc_xml_link if nc_xml_link else None,
+                    "url_pdf": nc_pdf_link if nc_pdf_link else None,
+                    "xml_uuid": xml_uuid,
                     **fechas,
                 })
 
@@ -277,7 +285,7 @@ class InvoiceManager:
 
         # Consulta para Facturas (CFDI)
         data = {
-            "Estatus": "",
+            "Estatus": "0",
             "Residente": "",
             "Obra": obra_value,
             "Proveedor": "",
@@ -312,6 +320,11 @@ class InvoiceManager:
                 return pd.DataFrame(), pd.DataFrame()
 
             clean_html = html.unescape(extracted_html)
+            # Exportar el HTML a un archivo en la computadora
+            export_path = os.path.join(os.path.expanduser("~"), "facturas_html_exportado.html")
+            with open(export_path, "w", encoding="utf-8") as f:
+                f.write(clean_html)
+            logger.info(f"HTML exportado a {export_path}")
 
             # Procesar HTML para facturas y notas
             df = procesar_html_content(clean_html)
@@ -319,6 +332,7 @@ class InvoiceManager:
 
             # Añadir el ID de obra a los DataFrames
             df['cuenta_gasto'] = obra_value
+            df_nc['cuenta_gasto'] = obra_value
             logger.info(f"Consultados {len(df)} facturas y {len(df_nc)} notas de crédito para obra: {obra_name}")
             return df, df_nc
         except Exception as e:
@@ -566,6 +580,60 @@ class InvoiceManager:
                 logger.error(f"Error al actualizar el archivo de IDs procesados: {e}")
         
         return nuevas_facturas_df
+
+    def filtrar_nuevas_notas_credito(self, df_notas: pd.DataFrame):
+        """Filtra las notas de crédito que no han sido procesadas anteriormente usando almacenamiento local.
+
+        Este método funciona de manera idéntica a ``filtrar_nuevas_facturas`` pero mantiene
+        sus propios archivos/backup de IDs procesados dentro de la carpeta
+        ``processed_nc_ids`` para no mezclar los UUID de facturas con los de las notas
+        de crédito (que, además, llevan el sufijo *_NC).
+
+        Args:
+            df_notas (pd.DataFrame): DataFrame con notas de crédito (column ``xml_uuid``)
+
+        Returns:
+            pd.DataFrame: DataFrame con las nuevas notas de crédito a procesar.
+        """
+        logger.info("Filtrando nuevas notas de crédito usando almacenamiento local…")
+
+        # --- Gestor de almacenamiento dedicado para notas de crédito ---
+        storage_manager_nc = LocalStorageManager(
+            base_data_path=self.local_storage_manager.base_data_path,
+            processed_ids_dir="processed_nc_ids",
+            backup_dir="processed_nc_ids_backup",
+        )
+
+        try:
+            storage_manager_nc.backup_ids_file()  # Respaldo antes de operar
+            processed_ids_set, _ = storage_manager_nc.get_processed_ids()
+            logger.info(f"IDs NC procesados cargados: {len(processed_ids_set)} IDs.")
+        except Exception as e:
+            logger.error(f"Error al interactuar con LocalStorageManager (NC): {e}")
+            logger.warning("No se pudieron cargar los IDs procesados de notas. Se considerarán todas como nuevas.")
+            processed_ids_set = set()
+
+        # Filtrar por xml_uuid no presentes
+        df_notas_con_uuid = df_notas.dropna(subset=["xml_uuid"])
+        nuevas_notas_df = df_notas_con_uuid[
+            ~df_notas_con_uuid["xml_uuid"].astype(str).isin(processed_ids_set)
+        ].copy()
+
+        logger.info(f"Notas de crédito nuevas encontradas: {len(nuevas_notas_df)}")
+
+        # Actualizar archivo de IDs si hay nuevas
+        if not nuevas_notas_df.empty:
+            nuevos_ids_procesados = set(nuevas_notas_df["xml_uuid"].astype(str).tolist())
+            todos_ids_actualizados = processed_ids_set.union(nuevos_ids_procesados)
+            try:
+                storage_manager_nc.update_processed_ids(list(todos_ids_actualizados))
+                logger.info(
+                    f"Archivo de IDs procesados (NC) actualizado con {len(nuevos_ids_procesados)} nuevos IDs."
+                )
+            except Exception as e:
+                logger.error(f"Error al actualizar el archivo de IDs procesados (NC): {e}")
+
+        return nuevas_notas_df
 
     def procesar_y_consolidar_facturas(self, obras_lista, max_workers=None):
         """Consulta, procesa y consolida facturas de varias obras.

@@ -9,6 +9,7 @@ from auth_manager import AuthManager
 from invoice_manager import InvoiceManager
 from xml_downloader import XMLDownloader
 from xml_processor import XMLProcessor
+from credit_note_xml_processor import CreditNoteXMLProcessor
 from local_storage_manager import LocalStorageManager
 from prediction_service import run_prediction_pipeline
 from collections import defaultdict
@@ -80,7 +81,7 @@ def main():
     # print (obras_lista)
     
     # Limitar a 3 obras para la prueba
-    # obras_prueba = obras_lista[:40] if len(obras_lista) > 40 else obras_lista
+    # obras_prueba = obras_lista[:1] if len(obras_lista) > 1 else obras_lista
     obras_prueba = obras_lista
     # 2. Inicializar gestor de facturas
     invoice_manager = InvoiceManager(session, base_data_path=APP_DATA_DIR)
@@ -89,7 +90,13 @@ def main():
         # 3. Consultar obras y obtener facturas
         print("\nConsultando facturas disponibles...")
         resultados = invoice_manager.consultar_facturas_sync(obras_prueba)
-        
+        notas_credito = resultados['notas'].dropna(subset=['url_pdf'])
+
+        # Filtrar notas de crédito nuevas
+        print("\nComprobando notas de crédito nuevas...")
+        df_nc_nuevas = invoice_manager.filtrar_nuevas_notas_credito(notas_credito)
+        # df_nc_nuevas.to_excel('ncccc.xlsx')
+
         # 4. Filtrar facturas pagadas
         print("\nFiltrando facturas pagadas...")
         df_pagadas = invoice_manager.filtrar_facturas_pagadas(resultados["facturas"])
@@ -116,25 +123,135 @@ def main():
         )
         
         print(f"\nFacturas encontradas: {len(resultados['facturas'])}")
-        print(f"Notas de crédito encontradas: {len(resultados['notas'])}")
+        print(f"Notas de crédito encontradas: {len(notas_credito)}")
+        print(f"Notas de crédito nuevas: {len(df_nc_nuevas)}")
         print(f"Errores: {len(resultados['errores'])}")
         print(f"\nFacturas pagadas: {len(df_pagadas)}")
         print(f"Facturas nuevas: {len(df_nuevas)}")
         
-        # # Guardar a Pickle las facturas nuevas
-        # if not df_nuevas.empty:
-        #     filename_nuevas = f"facturas_nuevas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
-        #     pickle_path_nuevas = os.path.join(RESULTS_DIR, filename_nuevas)
-        #     df_nuevas.to_pickle(pickle_path_nuevas)
-        #     print(f"Facturas nuevas guardadas en: {pickle_path_nuevas}")
+        # 5.1 Descargar y procesar XMLs de notas de crédito nuevas
+        if len(df_nc_nuevas) > 0:
+            print(f"\nDescargando {len(df_nc_nuevas)} archivos XML de notas de crédito...")
+            xml_downloader_nc = XMLDownloader(base_data_path=APP_DATA_DIR, session=session)
+            resultados_descarga_nc = xml_downloader_nc.download_all_xmls_sync(df_nc_nuevas)
+
+            print(f"\nResultados de la fase de descarga XML (NC):")
+            print(f"Total archivos intentados para descarga: {resultados_descarga_nc.get('total_files', 'N/A')}")
+            print(f"Éxitos en descarga: {resultados_descarga_nc.get('success_count', 'N/A')}")
+            print(f"Errores en descarga: {resultados_descarga_nc.get('error_count', 'N/A')}")
+            print(f"Archivos XML descargados en: {resultados_descarga_nc.get('download_folder_path', 'N/A')}")
+
+            downloaded_files_info_nc = resultados_descarga_nc.get('downloaded_xml_files_info', [])
+
+            if downloaded_files_info_nc:
+                print(f"\nIniciando procesamiento de {len(downloaded_files_info_nc)} archivos XML de notas de crédito...")
+                nc_processor = CreditNoteXMLProcessor()
+                processed_nc_dfs = []
+
+                for file_info in tqdm(downloaded_files_info_nc, desc="Procesando XMLs NC", unit="archivo"):
+                    local_path = file_info.get('local_path')
+                    row_idx = file_info.get('row_idx')
+                    if local_path and row_idx is not None:
+                        row_data_nc = df_nc_nuevas.iloc[row_idx]
+                        df_nc_single = nc_processor.procesar_xml(local_path, row_data_nc)
+                        if df_nc_single is not None and not df_nc_single.empty:
+                            processed_nc_dfs.append(df_nc_single)
+
+                if processed_nc_dfs:
+                    final_nc_df = pd.concat(processed_nc_dfs, ignore_index=True)
+                    print(f"Total de {len(final_nc_df)} conceptos extraídos de notas de crédito.")
+                    # Guardar a Pickle para pruebas y validación
+                    filename_nc = f"nc_data_procesado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+                    pickle_path_nc = os.path.join(RESULTS_DIR, filename_nc)
+                    final_nc_df.to_pickle(pickle_path_nc)
+                    print(f"Datos de notas de crédito procesados guardados en: {pickle_path_nc}")
+                    # Exportar a Excel para revisión
+                    filename_nc_excel = f"nc_data_procesado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                    excel_path_nc = os.path.join(RESULTS_DIR, filename_nc_excel)
+                    final_nc_df.to_excel(excel_path_nc, index=False)
+                    print(f"Excel generado en: {excel_path_nc}")
+
+                    # ------------------- Completar columnas requeridas para Supabase -------------------
+                    # 1. Mapear descripciones SAT
+                    if os.path.exists(sat_path):
+                        try:
+                            cat_sat = pd.read_pickle(sat_path)
+                            sat_descriptions = dict(zip(cat_sat.iloc[:, 0], cat_sat.iloc[:, 1]))
+                            if 'clave_producto' in final_nc_df.columns:
+                                final_nc_df['sat'] = final_nc_df['clave_producto'].map(sat_descriptions).str.lower()
+                        except Exception as e:
+                            logger.warning(f"Error al mapear catálogo SAT: {e}")
+
+                    # 2. Generar UUID v5 único por concepto
+                    from utils import concept_uuid5
+                    if 'uuid_concepto' not in final_nc_df.columns:
+                        final_nc_df['uuid_concepto'] = final_nc_df.apply(concept_uuid5, axis=1)
+
+                    # 3. Ejecutar pipeline de predicción para añadir categoría y puntuación de confianza
+                    try:
+                        predicted_nc_df = run_prediction_pipeline(
+                            final_nc_df,
+                            DOWNLOADS_DIR,
+                            RESULTS_DIR,
+                            MODEL_DIR,
+                            confidence_threshold=0.6
+                        )
+                        if predicted_nc_df is not None:
+                            final_nc_df = predicted_nc_df
+                    except Exception as e:
+                        logger.warning(f"No se pudo ejecutar el pipeline de predicción en NC: {e}")
+
+                    # 4. Asegurar columnas de predicción presentes
+                    if 'encontrado_en_diccionario' not in final_nc_df.columns:
+                        final_nc_df['encontrado_en_diccionario'] = False
+                    if 'confianza_prediccion' not in final_nc_df.columns:
+                        final_nc_df['confianza_prediccion'] = None
+                    if 'categoria_id' not in final_nc_df.columns:
+                        final_nc_df['categoria_id'] = None
+                    if 'subcategoria' not in final_nc_df.columns:
+                        final_nc_df['subcategoria'] = None
+
+                    # 5. Generar embeddings de texto si faltan
+                    if 'embedding' not in final_nc_df.columns:
+                        try:
+                            embeddings = OpenAIEmbeddings(model="text-embedding-3-small", request_timeout=30)
+                            texto_embedding = (
+                                "obra: " + final_nc_df["obra"].fillna("").str.lower() + " | " +
+                                "proveedor: " + final_nc_df["proveedor"].fillna("").str.lower() + " | " +
+                                "categoria: " + final_nc_df.get("categoria_id", pd.Series(dtype=str)).fillna("").str.lower() + " | " +
+                                final_nc_df["descripcion"].fillna("").str.lower()
+                            ).tolist()
+                            vectores = embeddings.embed_documents(texto_embedding)
+                            final_nc_df['embedding'] = vectores
+                        except Exception as e:
+                            logger.warning(f"No se pudieron generar embeddings para NC: {e}")
+                    # ------------------------------------------------------------------------------------
+                    # 6. Cargar notas de crédito a Supabase
+                    try:
+                        resultado_nc = supabase_uploader.cargar_notas_credito(final_nc_df)
+                        print(f"Notas de crédito cargadas a Supabase: {resultado_nc['count']}")
+                    except Exception as e:
+                        print(f"Error al cargar notas de crédito a Supabase: {e}")
+                        logging.error(f"Error al cargar notas de crédito a Supabase: {e}")
+            else:
+                print("No se descargaron archivos XML de notas de crédito, omitiendo fase de procesamiento.")
+        else:
+            print("\nNo hay notas de crédito nuevas para descargar y procesar XMLs.")
+        
+        # Guardar a Pickle las facturas nuevas
+        if not df_nuevas.empty:
+            filename_nuevas = f"facturas_nuevas_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+            pickle_path_nuevas = os.path.join(RESULTS_DIR, filename_nuevas)
+            df_nuevas.to_pickle(pickle_path_nuevas)
+            print(f"Facturas nuevas guardadas en: {pickle_path_nuevas}")
             
-        # # Guardar a Pickle las facturas pagadas con columnas específicas
-        # if not df_pagadas.empty:
-        #     df_pagadas_export = df_pagadas.copy()
-        #     filename_pagadas = f"facturas_concentrado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
-        #     pickle_path_pagadas = os.path.join(RESULTS_DIR, filename_pagadas)
-        #     df_pagadas_export.to_pickle(pickle_path_pagadas)
-        #     print(f"Facturas pagadas guardadas en: {pickle_path_pagadas}")
+        # Guardar a Pickle las facturas pagadas con columnas específicas
+        if not df_pagadas.empty:
+            df_pagadas_export = df_pagadas.copy()
+            filename_pagadas = f"facturas_concentrado_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pkl"
+            pickle_path_pagadas = os.path.join(RESULTS_DIR, filename_pagadas)
+            df_pagadas_export.to_pickle(pickle_path_pagadas)
+            print(f"Facturas pagadas guardadas en: {pickle_path_pagadas}")
             
         # 6. Descargar XMLs de facturas nuevas y almacenarlos localmente
         if len(df_nuevas) > 0:
@@ -370,12 +487,12 @@ def main():
             elif resultados_descarga.get('success_count', 0) == 0 and resultados_descarga.get('total_files', 0) > 0:
                 logger.warning("No se descargó ningún archivo XML, por lo tanto no hay nada que procesar.")
                 print("No se descargaron archivos XML, omitiendo fase de procesamiento.")
-            else: # Cubre el caso donde df_nuevas era > 0 pero no se descargó nada (ej. todas las descargas fallaron)
+            else:  # df_nuevas > 0 pero sin archivos descargados
                 logger.info("No hay archivos XML descargados para procesar.")
                 print("No hay archivos XML descargados para procesar.")
         else:
-            print("\nNo hay facturas nuevas para descargar y procesar XMLs.")
-            logger.info("No hay facturas nuevas, omitiendo descarga y procesamiento de XML.")
+            print("\nNo hay notas de crédito nuevas para descargar y procesar XMLs.")
+            logger.info("No hay NC nuevas, omitiendo descarga y procesamiento de XML.")
             
         print("\n===== Proceso completado =====\n")
             

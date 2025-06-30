@@ -507,3 +507,87 @@ class SupabaseUploader:
             logger.error(f"Error al mapear las categorías: {str(e)}")
             raise
 
+    def cargar_notas_credito(self, df_nc):
+        """Carga un DataFrame de notas de crédito en la tabla `portal_notas_credito`.
+
+        Realiza upsert por `uuid_nota_credito` en lotes de 100 registros, normalizando
+        tipos de datos (Timestamp → str, uuid.UUID → str, NaN/inf → None) y convirtiendo
+        embeddings NumPy a listas, tal como requiere Supabase.
+        """
+        import uuid, numpy as np, pandas as pd
+
+        if df_nc.empty:
+            logger.warning("No hay notas de crédito para cargar a Supabase")
+            return {"message": "No hay notas de crédito para cargar", "count": 0}
+
+        if 'uuid_nota_credito' not in df_nc.columns:
+            raise ValueError("El DataFrame debe contener la columna 'uuid_nota_credito' para realizar upsert")
+
+        df_temp = df_nc.copy()
+
+        # Normalizar claves primarias y relacionadas
+        df_temp['uuid_nota_credito'] = df_temp['uuid_nota_credito'].astype(str).str.lower().str.strip()
+        if 'xml_uuid' in df_temp.columns:
+            df_temp['xml_uuid'] = df_temp['xml_uuid'].astype(str).str.lower().str.strip()
+
+        # -- Conversión de fechas -----------------------------------------------------------------
+        date_cols = [
+            'fecha_factura', 'fecha_recepcion', 'fecha_pagada', 'fecha_autorizacion'
+        ]
+        for col in date_cols:
+            if col in df_temp.columns:
+                # Intentar parseo dd/mm/yy HH:MM primero
+                df_temp[col] = pd.to_datetime(
+                    df_temp[col],
+                    format='%d/%m/%y %H:%M',
+                    errors='coerce'
+                )
+                # Si sigue NaT intenta ISO genérico
+                mask_nat = df_temp[col].isna() & df_temp[col].astype(str).str.len() > 0
+                if mask_nat.any():
+                    df_temp.loc[mask_nat, col] = pd.to_datetime(df_temp.loc[mask_nat, col], errors='coerce')
+                # Formatear
+                df_temp[col] = df_temp[col].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else None)
+
+        # Conversión de tipos problemáticos
+        for col in df_temp.columns:
+            if pd.api.types.is_datetime64_any_dtype(df_temp[col]):
+                df_temp[col] = df_temp[col].apply(
+                    lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else None
+                )
+            elif df_temp[col].dtype == 'object' and df_temp[col].apply(lambda x: isinstance(x, uuid.UUID)).any():
+                df_temp[col] = df_temp[col].apply(lambda x: str(x) if isinstance(x, uuid.UUID) else x)
+
+        # Embedding (vector) → list
+        if 'embedding' in df_temp.columns:
+            df_temp['embedding'] = df_temp['embedding'].apply(
+                lambda v: v.tolist() if hasattr(v, 'tolist') else v
+            )
+
+        # Reemplazar NaN e infinitos por None
+        df_temp = df_temp.replace([np.nan, np.inf, -np.inf], None)
+
+        registros = df_temp.to_dict(orient="records")
+        batch_size = 100
+        total = len(registros)
+        exito = 0
+        error = 0
+
+        for i in range(0, total, batch_size):
+            batch = registros[i:i + batch_size]
+            try:
+                self.supabase.table("portal_notas_credito") \
+                    .upsert(batch, on_conflict="uuid_nota_credito") \
+                    .execute()
+                exito += len(batch)
+            except Exception as e:
+                logger.error(f"Error al cargar lote NC {i // batch_size + 1}: {e}")
+                error += len(batch)
+
+        return {
+            "message": "Operación completada en portal_notas_credito",
+            "count": total,
+            "exito": exito,
+            "error": error
+        }
+
