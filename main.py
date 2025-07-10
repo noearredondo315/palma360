@@ -95,7 +95,7 @@ def main():
         # Filtrar notas de crédito nuevas
         print("\nComprobando notas de crédito nuevas...")
         df_nc_nuevas = invoice_manager.filtrar_nuevas_notas_credito(notas_credito)
-        # df_nc_nuevas.to_excel('ncccc.xlsx')
+        df_nc_nuevas.to_excel('nc_nuevas.xlsx')
 
         # 4. Filtrar facturas pagadas
         print("\nFiltrando facturas pagadas...")
@@ -198,6 +198,29 @@ def main():
                         )
                         if predicted_nc_df is not None:
                             final_nc_df = predicted_nc_df
+
+                            # ---------------- Agrupar por uuid_concepto para evitar duplicados ----------------
+                            # Mapear categorías (convierte subcategoría -> categoria_id, etc.)
+                            final_nc_df = supabase_uploader.map_categoria(final_nc_df)
+
+                            columnas_a_sumar_nc = [
+                                'cantidad', 'subtotal', 'descuento', 'venta_tasa_0', 'venta_tasa_16',
+                                'total_iva', 'retencion_iva', 'retencion_isr', 'total_ish', 'total'
+                            ]
+                            columnas_a_conservar_nc = [
+                                'uuid_nota_credito',
+                                'obra', 'cuenta_gasto', 'proveedor', 'residente', 'folio', 'estatus',
+                                'fecha_factura', 'fecha_recepcion', 'fecha_pagada', 'fecha_autorizacion',
+                                'clave_producto', 'clave_unidad', 'descripcion', 'unidad', 'precio_unitario',
+                                'moneda', 'serie', 'url_pdf', 'url_oc', 'url_rem', 'xml_uuid',
+                                'encontrado_en_diccionario', 'confianza_prediccion', 'categoria_id',
+                                'subcategoria', 'sat', 'tipo_gasto'
+                            ]
+
+                            final_nc_df = final_nc_df.groupby(['uuid_concepto'], as_index=False).agg({
+                                **{col: 'sum' for col in columnas_a_sumar_nc if col in final_nc_df.columns},
+                                **{col: 'first' for col in columnas_a_conservar_nc if col in final_nc_df.columns}
+                            })
                     except Exception as e:
                         logger.warning(f"No se pudo ejecutar el pipeline de predicción en NC: {e}")
 

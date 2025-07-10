@@ -525,6 +525,8 @@ class SupabaseUploader:
 
         df_temp = df_nc.copy()
 
+
+
         # Normalizar claves primarias y relacionadas
         df_temp['uuid_nota_credito'] = df_temp['uuid_nota_credito'].astype(str).str.lower().str.strip()
         if 'xml_uuid' in df_temp.columns:
@@ -536,18 +538,23 @@ class SupabaseUploader:
         ]
         for col in date_cols:
             if col in df_temp.columns:
-                # Intentar parseo dd/mm/yy HH:MM primero
-                df_temp[col] = pd.to_datetime(
-                    df_temp[col],
-                    format='%d/%m/%y %H:%M',
-                    errors='coerce'
-                )
-                # Si sigue NaT intenta ISO genérico
-                mask_nat = df_temp[col].isna() & df_temp[col].astype(str).str.len() > 0
+                # Conversión genérica. No sobreescribimos la columna hasta tener el resultado final
+                serie_original = df_temp[col]
+
+                # 1) Intentar parsear con formato ISO estandar 'YYYY-MM-DD HH:MM:SS' para evitar advertencias
+                serie_dt = pd.to_datetime(serie_original, format='%Y-%m-%d %H:%M:%S', errors='coerce')
+
+                # 2) Para los valores que sigan siendo NaT, realizar un parseo flexible aceptando otros formatos
+                mask_nat = serie_dt.isna() & serie_original.notna()
                 if mask_nat.any():
-                    df_temp.loc[mask_nat, col] = pd.to_datetime(df_temp.loc[mask_nat, col], errors='coerce')
-                # Formatear
-                df_temp[col] = df_temp[col].apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else None)
+                    serie_dt.loc[mask_nat] = pd.to_datetime(
+                        serie_original.loc[mask_nat],
+                        dayfirst=False,  # formato flexible sin advertencias
+                        errors='coerce'
+                    )
+
+                # 3) Formatear siempre como string para Supabase o dejar None si no se pudo parsear
+                df_temp[col] = serie_dt.apply(lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else None)
 
         # Conversión de tipos problemáticos
         for col in df_temp.columns:
@@ -567,6 +574,8 @@ class SupabaseUploader:
         # Reemplazar NaN e infinitos por None
         df_temp = df_temp.replace([np.nan, np.inf, -np.inf], None)
 
+
+
         registros = df_temp.to_dict(orient="records")
         batch_size = 100
         total = len(registros)
@@ -577,7 +586,7 @@ class SupabaseUploader:
             batch = registros[i:i + batch_size]
             try:
                 self.supabase.table("portal_notas_credito") \
-                    .upsert(batch, on_conflict="uuid_nota_credito") \
+                    .upsert(batch, on_conflict="uuid_concepto") \
                     .execute()
                 exito += len(batch)
             except Exception as e:
