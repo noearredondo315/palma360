@@ -512,9 +512,20 @@ class InvoiceManager:
         Returns:
             pd.DataFrame: DataFrame con facturas filtradas y procesadas
         """
+        estatus_validos = [
+            "Pagada",
+            "Proceso de Pago",
+            "RevisaRes",
+            "Nota de crédito",
+            "Alta Exitosa",
+            "Recepción",
+            "Rechazada",
+            "Contrarecibo",
+            "Cancelada"
+        ]
         # Filtrar facturas pagadas y en proceso de pago
-        df_pagadas = df_global[df_global['estatus'].isin(["Pagada", "Proceso de Pago", "RevisaRes"])].copy()
-        
+        df_pagadas = df_global[df_global['estatus'].isin(estatus_validos)].copy()
+
         # Convertir las fechas al formato datetime y luego al formato Supabase
         date_columns = [
             "fecha_factura", "fecha_recepcion", "fecha_contrarecibo",

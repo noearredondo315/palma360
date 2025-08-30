@@ -444,7 +444,7 @@ def main():
                             DOWNLOADS_DIR,
                             RESULTS_DIR,
                             MODEL_DIR,
-                            confidence_threshold=0.6
+                            confidence_threshold=0.75
                         )
                         if predicted_df is not None:
                             print("Predicción completada exitosamente.")

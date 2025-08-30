@@ -30,3 +30,6 @@ venv/
 # Archivos Excel
 .xlsx
 
+debugggg.py
+handle_error.py
+test_fast.py
