@@ -3,6 +3,8 @@ import sys
 import logging
 import asyncio
 import pandas as pd
+import numpy as np
+import uuid
 from datetime import datetime
 from tqdm import tqdm
 from auth_manager import AuthManager
@@ -497,15 +499,7 @@ def main():
 
                             # print(predicted_df.iloc[:5, -3:])
                             # Procesar el DataFrame igual que en subir_predicciones_portal_desglosado
-                            import uuid
-                            import numpy as np
-                            import pandas as pd
-                            from datetime import datetime
-                            import os
                             
-                            # Crear directorio RESULTS_DIR si no existe
-                            RESULTS_DIR = "results"
-                            os.makedirs(RESULTS_DIR, exist_ok=True)
                             
                             # Hacer una copia del DataFrame
                             df_to_save = predicted_df.copy()
