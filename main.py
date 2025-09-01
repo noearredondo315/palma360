@@ -3,8 +3,6 @@ import sys
 import logging
 import asyncio
 import pandas as pd
-import numpy as np
-import uuid
 from datetime import datetime
 from tqdm import tqdm
 from auth_manager import AuthManager
@@ -498,35 +496,8 @@ def main():
                             predicted_df["embedding"] = vectores
 
                             # print(predicted_df.iloc[:5, -3:])
-                            # Procesar el DataFrame igual que en subir_predicciones_portal_desglosado
-                            
-                            
-                            # Hacer una copia del DataFrame
-                            df_to_save = predicted_df.copy()
-                            
-                            # Aplicar las mismas transformaciones que en subir_predicciones_portal_desglosado
-                            for col in df_to_save.columns:
-                                if pd.api.types.is_datetime64_any_dtype(df_to_save[col]):
-                                    df_to_save[col] = df_to_save[col].apply(
-                                        lambda x: x.strftime('%Y-%m-%d %H:%M:%S') if pd.notnull(x) else None
-                                    )
-                                # Convertir columnas de tipo UUID a string
-                                if df_to_save[col].dtype == 'object' and df_to_save[col].apply(lambda x: isinstance(x, uuid.UUID)).any():
-                                    df_to_save[col] = df_to_save[col].apply(lambda x: str(x) if isinstance(x, uuid.UUID) else x)
-                            
-                            # Reemplazar NaN, inf y -inf por None
-                            df_to_save = df_to_save.replace([np.nan, np.inf, -np.inf], None)
-                            
-                            # Generar nombre de archivo con timestamp
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                            output_file = os.path.join(RESULTS_DIR, f"predicciones_{timestamp}.pkl")
-                            
-                            # Guardar el DataFrame procesado
-                            df_to_save.to_pickle(output_file)
-                            print(f"DataFrame guardado en: {output_file}")
-                            
-                            # Comentado temporalmente: Subir predicciones a Supabase
-                            # supabase_uploader.subir_predicciones_portal_desglosado(predicted_df)
+                            # Subir predicciones a Supabase
+                            supabase_uploader.subir_predicciones_portal_desglosado(predicted_df)
 
                         else:
                             print("No se pudo completar la predicción. Consulte los logs para más detalles.")
