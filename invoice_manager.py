@@ -525,6 +525,8 @@ class InvoiceManager:
         ]
         # Filtrar facturas pagadas y en proceso de pago
         df_pagadas = df_global[df_global['estatus'].isin(estatus_validos)].copy()
+        df_pagadas = df_pagadas[df_pagadas["moneda"] != "XXX"].copy()
+
 
         # Convertir las fechas al formato datetime y luego al formato Supabase
         date_columns = [
