@@ -497,6 +497,8 @@ def main():
 
                             # print(predicted_df.iloc[:5, -3:])
                             # Subir predicciones a Supabase
+                            predicted_df = predicted_df[predicted_df["moneda"] != "XXX"].copy()
+
                             supabase_uploader.subir_predicciones_portal_desglosado(predicted_df)
 
                         else:
